@@ -3,7 +3,7 @@
 A Kubernetes platform on AWS, built with Terraform and managed through GitOps.
 EKS Platform with GitOps
 A hands-on project that builds a production-style Kubernetes platform on AWS using Terraform, tests it, and tears it down to keep costs under control.
-Status: Core platform built, tested, and destroyed. GitOps (Argo CD) is planned for a later session.
+Status: Core platform built, tested, and destroyed. GitOps (Argo CD) is now built.
 What this project is and why I built it
 Kubernetes is the industry-standard way to run containerized applications. Amazon EKS (Elastic Kubernetes Service) is AWS's managed version, where AWS runs the control plane and I manage the worker machines. I built this to show I can stand up a complete, repeatable cloud platform from code, not by clicking in the console.
 Everything is written in Terraform, so the whole platform can be created with one command and removed with another. That matters for cost: an EKS cluster bills about $0.10 per hour plus worker machines and a NAT gateway, so I built it, tested it, and destroyed it in the same session.
@@ -55,3 +55,47 @@ What's next
 • Add GitOps with Argo CD so the cluster's apps are driven from Git.
 • Replace the nginx stand-in with a small custom app.
 • Keep the build, test, and destroy pattern so the project never leaves running costs behind.
+
+## GitOps with Argo CD
+
+After building the cluster, I added GitOps using Argo CD, so the cluster's apps are driven from Git instead of by typing commands.
+
+**What GitOps means:** Git is the single source of truth. I change a file in GitHub, and the cluster updates itself to match. Nobody has to run manual commands on the cluster.
+
+**What I set up:**
+- Installed Argo CD into its own namespace on the cluster.
+- Logged in to the Argo CD dashboard through a port-forward tunnel on port 8080.
+- Added a small app folder to this repo (apps/hello) with a deployment and a service for a stand-in nginx app called hello-web.
+- Created an Argo CD application pointing at that folder on the main branch, with automatic sync turned on.
+
+**Result:** Argo CD showed the app as Healthy and Synced, with two pods running.
+
+**GitOps test:** I changed replicas from 2 to 3 in deployment.yaml, committed, and pushed to GitHub. After a refresh in Argo CD, a third pod appeared on its own, without me touching the cluster.
+
+## Issues Hit and How I Fixed Them
+
+**kubectl not recognized after install**
+Right after installing kubectl with winget, the VS Code terminal said the command wasn't found. The cause was a cached PATH: the terminal had started before the install, so it didn't know about the new tool. Fix: fully close and reopen VS Code. Lesson: restart the whole editor after installing a command-line tool.
+
+**Leftover NAT gateway from another project**
+After tearing down the cluster, I ran a stray-resource check against the real AWS account instead of trusting that the destroy had caught everything. It found a NAT gateway and Elastic IP still running from the landing-zone production environment, costing about $1 a day. I removed them with a targeted destroy and confirmed zero NAT gateways and zero Elastic IPs afterward. Lesson: always verify cleanup against the real account, not just the Terraform output.
+
+**Terraform could not find my AWS credentials**
+When I ran terraform plan, it failed with a credentials error about not being able to reach the instance metadata service, even though I had signed in with AWS SSO. The cause was that Terraform did not know which AWS profile to use. Fix: set the AWS_PROFILE environment variable to my SSO profile in the terminal. In PowerShell, that only lasts for that one terminal window, so it has to be set again in each new terminal. Lesson: when the AWS CLI works but Terraform does not, check which profile Terraform is actually using.
+
+## Cost and Teardown
+
+This project costs money while it runs, so I follow the same routine every session: build, test, destroy, check.
+
+**Approximate costs while running:**
+- EKS cluster: about $0.10 per hour
+- Two t3.small worker nodes: about $0.04 per hour combined
+- NAT gateway plus Elastic IP: about $1 per day
+- VPC, subnets, route tables, and IAM roles: free
+
+**Routine:**
+1. Build the platform with Terraform and test it.
+2. Run terraform destroy at the end of the session.
+3. Run a stray-resource check against the real AWS account, looking for NAT gateways, Elastic IPs, and EKS clusters, so nothing is left running by mistake.
+
+Because everything is destroyed after each session, the project's running cost stays at a few cents per build.
