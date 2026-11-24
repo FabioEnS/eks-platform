@@ -1,0 +1,34 @@
+name: Terraform Plan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::072942364694:role/eks-platform-github-actions
+          aws-region: us-east-1
+
+      - run: terraform fmt -check
+
+      - run: terraform init
+
+      - run: terraform validate
+
+      - run: terraform plan
