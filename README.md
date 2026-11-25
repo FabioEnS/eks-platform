@@ -83,7 +83,7 @@ After tearing down the cluster, I ran a stray-resource check against the real AW
 **Terraform could not find my AWS credentials**
 When I ran terraform plan, it failed with a credentials error about not being able to reach the instance metadata service, even though I had signed in with AWS SSO. The cause was that Terraform did not know which AWS profile to use. Fix: set the AWS_PROFILE environment variable to my SSO profile in the terminal. In PowerShell, that only lasts for that one terminal window, so it has to be set again in each new terminal. Lesson: when the AWS CLI works but Terraform does not, check which profile Terraform is actually using.
 
-## Cost and Teardown
+### Cost and Teardown
 
 This project costs money while it runs, so I follow the same routine every session: build, test, destroy, check.
 
@@ -99,3 +99,47 @@ This project costs money while it runs, so I follow the same routine every sessi
 3. Run a stray-resource check against the real AWS account, looking for NAT gateways, Elastic IPs, and EKS clusters, so nothing is left running by mistake.
 
 Because everything is destroyed after each session, the project's running cost stays at a few cents per build.
+
+## CI Pipeline with GitHub Actions
+Every push to this repo now runs a GitHub Actions workflow (.github/workflows/terraform.yml) that checks the Terraform code and runs a real terraform plan against AWS. It logs in to AWS using OIDC, so there are no long-lived AWS keys stored in GitHub.
+What the pipeline does
+1.  Checks out the code.
+2.  Sets up Terraform.
+3.  Logs in to AWS by assuming the IAM role eks-platform-github-actions in us-east-1 (OIDC, short-lived credentials).
+4.  Runs terraform fmt -check, terraform init, terraform validate, and terraform plan in the terraform folder.
+The role is read-only (AWS ReadOnlyAccess policy), so the pipeline can look at the account and plan, but it cannot create or change anything. The plan shows everything as new because Terraform state is local, not remote.
+How the login is locked down
+The role's trust policy only lets this one repository assume it. The condition on the OIDC sub claim is pinned to this repo's numeric IDs:
+repo:FabioEnS@345034732/eks-platform@1432591497:*
+The role is defined in terraform/github-oidc.tf. It reuses the account's existing GitHub OIDC provider through a Terraform data block instead of creating a new one.
+Issues Hit and How I Fixed Them (Pipeline)
+1. Slash in a VS Code new-file name created a folder
+Symptom: terraform plan kept saying 22 to add instead of 25, and the file showed up red/orange in the editor.
+Cause: I typed a file name with a slash in it. VS Code treated the slash as a folder, which left two copies of github-oidc.tf. Terraform read the stale copy in the terraform folder while I was editing the copy in the leftover folder.
+Fix: Copied the edited file over the real one with Copy-Item and deleted the leftover folder.
+Lesson: Hover over the tab to check the real file path, and use dir or Select-String to see what is actually on disk.
+2. Wrong file ending (.cf instead of .tf)
+Cause: Terraform ignores any file that does not end in .tf, so the resources in it were silently skipped.
+Fix: Renamed the file to end in .tf.
+3. PowerShell split my -target flag
+Cause: In PowerShell, an unquoted -target=aws_iam_role.x gets split at the dots.
+Fix: Put quotes around each target, like -target="aws_iam_role.x".
+4. OIDC provider already existed (409 error)
+Symptom: 409 EntityAlreadyExists when creating the GitHub OIDC provider.
+Cause: AWS allows only one GitHub OIDC provider per account, and the landing zone project had already created it.
+Fix: Used a Terraform data block to look up the existing provider instead of creating a new one.
+5. Case-sensitive GitHub username
+Symptom: The first pipeline runs failed at the AWS login step with Not authorized to perform sts:AssumeRoleWithWebIdentity.
+Cause: My GitHub username is spelled FabioEnS, and I had typed FabioENS. The trust policy match is case-sensitive.
+Fix: Corrected the spelling. This was only one of several causes, though (see 6 and 7).
+6. Missing sts:TagSession permission
+Cause: The GitHub login passes session tags (the log said 7 role session tags were used), and the role's trust policy only allowed sts:AssumeRoleWithWebIdentity.
+Fix: Added sts:TagSession next to sts:AssumeRoleWithWebIdentity in the trust policy.
+7. The OIDC subject uses numeric IDs, not just names
+Symptom: With the condition set to repo:* the login worked, but every version with my real repo name failed (exact case, all lowercase, and a wildcard owner).
+Cause: GitHub sends the sub claim with numeric IDs attached to the owner and repo, not just their names.
+How I found it: I added a temporary workflow step that printed the token's subject. It showed repo:FabioEnS@345034732/eks-platform@1432591497:ref:refs/heads/main.
+Fix: Pinned the condition to repo:FabioEnS@345034732/eks-platform@1432591497:*, applied it, and re-ran the pipeline green. Then removed the debug step and pushed.
+Lesson: When a trust policy fails and the reason is not obvious, loosen it temporarily on a read-only role, find out what the real value is, then lock it back down. Never leave it loosened.
+Status
+The pipeline runs green end to end: login, format check, init, validate, and plan. No infrastructure is running, and the stray-resource check (NAT gateways, Elastic IPs, EKS clusters in us-east-1) came back clean.
