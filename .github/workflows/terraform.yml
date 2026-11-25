@@ -20,10 +20,6 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
 
-      - name: Show OIDC subject
-        run: |
-          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
-          echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .sub
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::072942364694:role/eks-platform-github-actions
